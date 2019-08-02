@@ -1,0 +1,524 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <string.h>
+
+#include <mpi.h>
+#include <math.h>
+#include <ctime>
+
+#include "vector3d.h"
+#include "savebmp.h"
+#include "properties.h"
+
+#define MASTER 0	//master process
+#define epsilon 0.000000000000000222
+#define G 6.67408e-11 // The gravitational constant
+
+int my_rank;
+
+void Initialize_Input(int argc, char* argv[], int* numParticlesLight, int* numParticleMedium, int* numParticleHeavy, int* numSteps, int* subSteps, double* timeSubStep, int* width, int* height, char** output);
+void Initialize_particles(struct body* bodies, int total_particles, int numParticlesLight, int numParticleMedium, int numParticleHeavy, int width, int height);
+void print_status(struct body* bodies, int i);
+void saveIt(struct body* bodies, char *filename, int width, int height, int total_particles);
+void calculateForce(struct body* bodies, int total_particles);
+void updatePosVel(struct body* bodies, int total_particles, double timeSubStep, int width, int height);
+int main(int argc, char* argv[]){
+
+	//variables
+	int currentstep, currentsubstep;
+	int width, height;
+	int numParticlesLight;// = atoi(argv[1]);
+	int numParticleMedium;// = atoi(argv[2]);
+	int numParticleHeavy;// = atoi(argv[3]);
+
+	int numSteps;// = atoi(argv[4]);
+	int subSteps;// = atoi(argv[5]);
+	double timeSubStep;//= atoi(argv[6]);
+	char* output;
+	int total_particles;
+	struct body *bodies;
+	char* filename;
+	int filecounter=0;
+	double start, end;
+	double total_time=0;
+	
+
+	
+	//width=atoi(argv[7]);
+	//height=atoi(argv[8]);
+
+	
+	
+	//printf("sdsd \n"); 
+	
+	
+	
+	MPI_Init(&argc,&argv);
+
+	int p;
+
+	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &p);
+
+	//root node stuff goes here
+	if(my_rank == MASTER){
+		
+	
+		Initialize_Input(argc, argv, &numParticlesLight, &numParticleMedium, &numParticleHeavy, &numSteps, &subSteps, &timeSubStep, &width, &height, &output);
+		total_particles = numParticlesLight+numParticleMedium+numParticleHeavy;
+		printf("total particles %d \n", total_particles);
+		bodies = (body*)malloc(total_particles*sizeof(body));
+		printf("Initializing \n");
+		Initialize_particles(bodies, total_particles, numParticlesLight, numParticleMedium, numParticleHeavy, width, height);
+
+		//ERRORORORORO
+		/*
+		for (i = 0; i < 4; i++){
+			for (j=0; j < 4; j++){
+				image[3*(0+i*width+j)+0]=255;
+				image[3*(0+i*width+j)+1]=0;
+				image[3*(0+i*width+j)+2]=0;
+			}
+		}
+		*/
+
+
+	}
+
+	//all other nodes do this
+	else{
+		//printf("massLightMin : %f \n", massLightMin);
+	}
+	if(my_rank == MASTER){
+		//print_status(bodies, 0);
+
+		//almost done, just save the image
+		//saveBMP(argv[9], image, width, height);
+	}
+	if(my_rank == MASTER){
+		//double currentTime = 0;
+		//printf("numSteps : %d \n", numSteps);
+		for (currentstep = 0; currentstep < numSteps; currentstep++){
+			char *prefix;
+			printf("Setting name %d \n", filecounter);
+			if (filecounter < 10){
+				prefix = (char* )"000";
+			}
+			else if ((filecounter >= 10) && (filecounter < 100)){
+				prefix = (char* )"00";
+			}
+			else if ((filecounter >= 100) && (filecounter < 1000))
+				prefix = (char* )"0";
+			else
+				prefix = (char* )"";
+			asprintf(&filename,"%s%s%d",argv[9],prefix,filecounter);
+			//printf("Saving \n");
+			saveIt(bodies, filename, width, height, total_particles);
+			//printf("%d \n", image[100]);
+			for (currentsubstep = 1; currentsubstep <= subSteps; currentsubstep++){
+				//currentTime = (currentstep*subSteps+currentsubstep)*timeSubStep;
+				start = MPI_Wtime();
+				printf("Calculating forces \n");
+				calculateForce(bodies, total_particles);
+				printf("Updating pos vel \n");
+				updatePosVel(bodies, total_particles, timeSubStep, width, height);
+				end = MPI_Wtime();
+				total_time += (end-start);
+				printf("Time : %f \n", end-start);
+				//printf("time : %f \n", currentTime);
+
+			}
+
+			//prefix for output file
+			filecounter += 1;
+			
+			//printf("filename : %s \n", filename);
+			
+
+
+		}
+		printf("Total Time : %f \n", total_time);
+		
+	}
+
+	
+	MPI_Finalize();
+	return 0;
+}
+
+void Initialize_Input(int argc, char* argv[], int* numParticlesLight, int* numParticleMedium, int* numParticleHeavy, int* numSteps, int* subSteps, double* timeSubStep, int* width, int* height, char** output){
+	if(my_rank==MASTER){
+        if( argc != 10){
+			printf("Usage: %s numParticlesLight numParticleMedium numParticleHeavy numSteps subSteps timeSubStep imageWidth imageHeight imageFilenamePrefix\n", argv[0]);
+			MPI_Finalize();
+			exit(0);
+		}
+        
+        *numParticlesLight = strtol(argv[1], NULL, 10);
+        *numParticleMedium = strtol(argv[2], NULL, 10);
+        *numParticleHeavy = strtol(argv[3], NULL, 10);
+        *numSteps = strtol(argv[4], NULL, 10);
+        *subSteps = strtol(argv[5], NULL, 10);
+        *timeSubStep = strtod(argv[6], NULL);
+        *width = strtol(argv[7], NULL, 10);
+        *height = strtol(argv[8], NULL, 10);
+        
+    }
+    //If the number of particles are negative
+    if (numParticlesLight<0 || numParticleMedium<0 || numParticleHeavy<0){
+    	if (my_rank == MASTER){
+    		printf("Number of particles can't be negative \n");
+    	}
+    	MPI_Finalize();
+    	exit(0);
+    }
+    //If the number of steps or number of subSteps is negative
+    if (numSteps<=0 || subSteps<=0){
+    	if (my_rank == MASTER){
+    		printf("Number of steps must be greater than zero \n");
+    	}
+    	MPI_Finalize();
+    	exit(0);
+    }
+    //If Time of substeps is negative
+    if (timeSubStep<=0 ){
+    	if (my_rank == MASTER){
+    		printf("timeSubStep must be greater than zero \n");
+    	}
+    	MPI_Finalize();
+    	exit(0);
+    }
+    //If width or height is negative
+    if (width<=0 || height<=0){
+    	if (my_rank == MASTER){
+    		printf("Width and height must be greater than zero \n");
+    	}
+    	MPI_Finalize();
+    	exit(0);
+
+    }
+    
+    
+
+    /*
+    MPI_Bcast(numParticlesLight, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(numParticleMedium, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(numParticleHeavy, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(numSteps, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(subSteps, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(timeSubStep, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(width, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(height, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    */
+}
+
+void Initialize_particles(struct body *bodies, int total_particles, int numParticlesLight, int numParticleMedium, int numParticleHeavy, int width, int height){
+	if (my_rank == MASTER){
+		double temp, temp1;
+		int counter = 0;
+		int i;
+		int direction;
+		srand48(time(NULL));
+		//Light particles
+		for (i = 0; i < numParticlesLight; i++){
+			bodies[i].type = 0;
+			temp = drand48();
+			temp = drand48();
+			bodies[i].position.x = (temp*width);
+			temp = drand48();
+			bodies[i].position.y = (temp*height);
+			bodies[i].position.z = 0;
+			temp = drand48();
+			temp1 = drand48();
+			//printf("temp1 : %d \n", int(temp1+0.5));
+			//positive
+			if (int(temp1+0.5) == 0){
+				direction = 1;
+			}
+			else
+				direction = -1;
+			bodies[i].velocity.x = (direction*(temp*(velocityLightMax-velocityLightMin)+velocityLightMin));
+			temp = drand48();
+			temp1 = drand48();
+			//printf("temp1 : %d \n", int(temp1+0.5));
+			//positive
+			if (int(temp1+0.5) == 0){
+				direction = 1;
+			}
+			else
+				direction = -1;
+			bodies[i].velocity.y = (direction*(temp*(velocityLightMax-velocityLightMin)+velocityLightMin));
+			bodies[i].velocity.z = 0;
+			temp = drand48();
+			bodies[i].mass = ((temp*(massLightMax-massLightMin)+massLightMin));
+			bodies[i].force.x = 0;
+			bodies[i].force.y = 0;
+			bodies[i].force.z = 0;
+			//printf("%f \n", temp);
+		}
+		//Medium particles
+		counter = numParticlesLight;
+		for (i = counter; i < numParticleMedium+counter; i++){
+			bodies[i].type = 1;
+			temp = drand48();
+			temp = drand48();
+			bodies[i].position.x = (temp*width);
+			temp = drand48();
+			bodies[i].position.y = (temp*height);
+			bodies[i].position.z = 0;
+			temp = drand48();
+			temp1 = drand48();
+			//printf("temp1 : %d \n", int(temp1+0.5));
+			//positive
+			if (int(temp1+0.5) == 0){
+				direction = 1;
+			}
+			else
+				direction = -1;
+			bodies[i].velocity.x = (direction*(temp*(velocityMediumMax-velocityMediumMin)+velocityMediumMin));
+			temp = drand48();
+			temp1 = drand48();
+			//printf("temp1 : %d \n", int(temp1+0.5));
+			//positive
+			if (int(temp1+0.5) == 0){
+				direction = 1;
+			}
+			else
+				direction = -1;
+			bodies[i].velocity.y = (direction*(temp*(velocityMediumMax-velocityMediumMin)+velocityMediumMin));
+			bodies[i].velocity.z = 0;
+			temp = drand48();
+			bodies[i].mass = ((temp*(massMediumMax-massMediumMin)+massMediumMin));
+			bodies[i].force.x = 0;
+			bodies[i].force.y = 0;
+			bodies[i].force.z = 0;
+			//printf("%f \n", temp);
+		}
+		//Heavy particles
+		counter += numParticleMedium;
+		for (i = counter; i < numParticleHeavy+counter; i++){
+			bodies[i].type = 2;
+			temp = drand48();
+			temp = drand48();
+			bodies[i].position.x = (temp*width);
+			temp = drand48();
+			bodies[i].position.y = (temp*height);
+			bodies[i].position.z = 0;
+			temp = drand48();
+			temp1 = drand48();
+			//printf("temp1 : %d \n", int(temp1+0.5));
+			//positive
+			if (int(temp1+0.5) == 0){
+				direction = 1;
+			}
+			else
+				direction = -1;
+			bodies[i].velocity.x = (direction*(temp*(velocityHeavyMax-velocityHeavyMin)+velocityHeavyMin));
+			temp = drand48();
+			temp1 = drand48();
+			//printf("temp1 : %d \n", int(temp1+0.5));
+			//positive
+			if (int(temp1+0.5) == 0){
+				direction = 1;
+			}
+			else
+				direction = -1;
+			bodies[i].velocity.y = (direction*(temp*(velocityHeavyMax-velocityHeavyMin)+velocityHeavyMin));
+			bodies[i].velocity.z = 0;
+			temp = drand48();
+			bodies[i].mass = ((temp*(massHeavyMax-massHeavyMin)+massHeavyMin));
+			bodies[i].force.x = 0;
+			bodies[i].force.y = 0;
+			bodies[i].force.z = 0;
+			//printf("%f \n", temp);
+		}
+		counter += numParticleHeavy;
+
+		printf("%d \n", counter);
+	}
+	
+}
+
+void print_status(struct body *bodies, int i){
+	printf("particle %d has type : %d with x position : %f, y position : %f, x velocity : %f, y velocity : %f, mass : %f, xforce : %f, yforce : %f \n", i, bodies[i].type, bodies[i].position.x, bodies[i].position.y, bodies[i].velocity.x, bodies[i].velocity.y, bodies[i].mass, bodies[i].force.x, bodies[i].force.y);
+	
+}
+
+void saveIt(struct body* bodies, char *filename, int width, int height, int total_particles){
+	int i;
+	int a, b;
+	unsigned char* image;
+	int holder = height*width;
+	int tempx, tempy, temptype;
+
+	image =(unsigned char*) malloc(3*holder); 
+
+	if (my_rank == MASTER){
+		for (i=0;i<holder;++i){
+			image[3*i+0]=0;
+			image[3*i+1]=0;
+			image[3*i+2]=0;
+		}
+		for (i = 0; i < total_particles; i++){
+			tempx = bodies[i].position.x;
+			tempy = bodies[i].position.y;
+			if (tempx >= width)
+				tempx = width-1;
+			if (tempx <= 0)
+				tempx = 0;
+			if (tempy >= height)
+				tempy = height-1;
+			if (tempy <= 0){
+				tempy = 0;
+			}
+			temptype = bodies[i].type;
+			vec3 tempcolor;
+					if (temptype == 0)
+						tempcolor = colourLight;
+					else if (temptype==1)
+						tempcolor = colourMedium;
+					else
+						tempcolor = colourHeavy;
+			for (a = tempy; a < tempy+1; a++){
+				for (b=tempx; b < tempx+1; b++){
+					//printf("a : %d, b : %d \n", a, b);
+					//printf("%d \n", (int(tempcolor.x)*255));
+					image[3*(a*width+b)+0]=(int(tempcolor.x)*255);
+					image[3*(a*width+b)+1]=(int(tempcolor.y)*255);
+					image[3*(a*width+b)+2]=(int(tempcolor.z)*255);
+				}
+			}
+		
+		}
+		strcat(filename,".bmp");
+		saveBMP(filename, image, width, height);
+	}
+	free(image);
+}
+
+void calculateForce(struct body* bodies, int total_particles){
+	int first, second;
+	double tempx, tempy;
+	double distance;
+	for (first = 0; first < total_particles; first++){
+		for (second = 0; second < total_particles; second++){
+			if (second > first){
+				//printf("BIG \n");
+				distance = pow(fabs(bodies[first].position.x - bodies[second].position.x), 2.0);
+				//printf("xdistance : %f \n", distance);
+				//printf("%f \n", (G*(bodies[first].mass)*(bodies[second].mass)));
+				tempx = (G*(bodies[first].mass)*(bodies[second].mass))/distance;
+				//printf("tempx : %f \n", tempx);
+				if (bodies[first].position.x <= bodies[second].position.x){
+					bodies[first].force.x += tempx;
+					bodies[second].force.x -= tempx;
+				}
+				else{
+					bodies[first].force.x -= tempx;
+					bodies[second].force.x += tempx;
+				}
+				distance = pow(fabs(bodies[first].position.y - bodies[second].position.y), 2.0);
+				//printf("ydistance : %f \n", distance);
+				//printf("%f \n", (G*(bodies[first].mass)*(bodies[second].mass)));
+				tempy = (G*(bodies[first].mass)*(bodies[second].mass))/distance;
+				//printf("tempy : %f \n", tempy);
+				if (bodies[first].position.y <= bodies[second].position.y){
+					bodies[first].force.y += tempy;
+					bodies[second].force.y -= tempy;
+				}
+				else{
+					bodies[first].force.y -= tempy;
+					bodies[second].force.y += tempy;
+				}
+				//print_status(bodies, 0);
+				//print_status(bodies, 1);
+				//printf("first xforce : %f \t yforce : %f \n", bodies[first].force.x, bodies[first].force.y);
+			}
+		}
+	}
+}
+
+void updatePosVel(struct body* bodies, int total_particles, double timeSubStep, int width, int height){
+	int a;
+	int thistype;
+	double xacceleration, yacceleration;
+	double tempvx, tempvy;
+	double max, min;
+	for (a = 0; a < total_particles; a++){
+		xacceleration = (bodies[a].force.x)/(bodies[a].mass);
+		//printf("xacceleration : %f \t", xacceleration);
+		yacceleration = (bodies[a].force.y)/(bodies[a].mass);
+		//printf("yacceleration : %f \n", yacceleration);
+		bodies[a].velocity.x += (xacceleration*timeSubStep);
+		//printf("aa %f \t", (xacceleration*timeSubStep));
+		bodies[a].velocity.y += (yacceleration*timeSubStep);
+		bodies[a].velocity.z = 0;
+		//printf("bb %f \n", (yacceleration*timeSubStep));
+		thistype = bodies[a].type;
+		//printf("%d \n", thistype);
+		
+		if (thistype == 0){
+			max = velocityLightMax;
+			min = velocityLightMin;
+		}
+		else if (thistype == 1){
+			max = velocityMediumMax;
+			min = velocityMediumMin;
+		}
+		else{
+			max = velocityHeavyMax;
+			min = velocityHeavyMin;
+		}
+		//bodies[a].velocity.Normalize();
+		//printf("%f \t", bodies[a].velocity.x);
+		//printf("%f \t", bodies[a].velocity.y);
+		//printf("%f \n", bodies[a].velocity.z);
+		
+		if (bodies[a].velocity.Magnitude()<min){
+			//printf("a \n");
+			bodies[a].velocity.Normalize();
+			bodies[a].velocity.x*=min;
+			bodies[a].velocity.y*=min;
+			bodies[a].velocity.z = 0;
+		}
+		
+		else if (bodies[a].velocity.Magnitude()>max){
+			bodies[a].velocity.Normalize();
+			bodies[a].velocity.x*=max;
+			bodies[a].velocity.y*=max;
+			bodies[a].velocity.z = 0;
+		}
+
+		vec3 temptemp;
+		temptemp.x = bodies[a].position.x + (bodies[a].velocity.x*timeSubStep);
+		temptemp.y = bodies[a].position.y + (bodies[a].velocity.y*timeSubStep);
+		temptemp.z = 0;
+		bodies[a].position = temptemp;
+		
+		//Border
+		
+		if (bodies[a].position.x<0){
+			bodies[a].position.x=0;
+			bodies[a].velocity.x=0;
+		}
+		if(bodies[a].position.x>width-4){
+			bodies[a].position.x=width-4;
+			bodies[a].velocity.x=0;
+		}
+		if(bodies[a].position.y<0){
+			bodies[a].position.y=0;
+			bodies[a].velocity.y=0;
+		}
+		if(bodies[a].position.y>height-4){
+			bodies[a].position.y=height-4;
+			bodies[a].velocity.y=0;
+		}
+		
+		bodies[a].force.x=0;
+		bodies[a].force.y=0;
+		bodies[a].force.z=0;
+
+	}
+}
+
